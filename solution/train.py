@@ -14,7 +14,9 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import PolynomialFeatures
 
+from solution.cli import add_artifacts_dir_argument, add_data_root_argument, add_strict_argument
 from solution.config import (
+    DEFAULT_ARTIFACTS_DIR,
     DEFAULT_DATA_ROOT,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
@@ -22,8 +24,8 @@ from solution.config import (
     SourceName,
 )
 from solution.data import TrainingDataReport, TrainingSample, build_training_samples
+from solution.validation import ensure_dataset_present
 
-DEFAULT_ARTIFACTS_DIR = Path("artifacts")
 DEFAULT_POLYNOMIAL_DEGREE = 2
 DEFAULT_RIDGE_ALPHA = 1.0
 DEFAULT_RANDOM_SEED = 42
@@ -56,17 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Train polynomial Ridge baselines for top->door2 and bottom->door2."
     )
-    parser.add_argument(
-        "--data-root",
-        type=Path,
-        default=DEFAULT_DATA_ROOT,
-        help="Path to the unpacked coord_data directory (default: %(default)s).",
-    )
-    parser.add_argument(
-        "--artifacts-dir",
-        type=Path,
-        default=DEFAULT_ARTIFACTS_DIR,
-        help="Directory where trained artifacts and reports will be saved.",
+    add_data_root_argument(parser)
+    add_artifacts_dir_argument(
+        parser,
+        help_text="Directory where trained artifacts and reports will be saved.",
     )
     parser.add_argument(
         "--degree",
@@ -86,11 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_RANDOM_SEED,
         help="Random seed recorded in artifacts for reproducibility.",
     )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="Use strict point-count filtering instead of allow_partial preparation.",
-    )
+    add_strict_argument(parser)
     return parser
 
 
@@ -123,6 +114,7 @@ def train_and_save_models(
     if alpha < 0.0:
         raise ValueError(f"'alpha' must be >= 0, got {alpha}.")
 
+    ensure_dataset_present(Path(data_root))
     random.seed(seed)
 
     samples, report = build_training_samples(
@@ -145,8 +137,7 @@ def train_and_save_models(
 
         model = train_source_model(source_samples=source_samples, degree=degree, alpha=alpha)
         model_path = artifacts_root / f"{source}_model.pkl"
-        with model_path.open("wb") as handle:
-            pickle.dump(model, handle)
+        model_path.write_bytes(pickle.dumps(model))
 
         source_artifacts[source] = TrainedSourceArtifact(
             source=source,
@@ -281,6 +272,7 @@ def _group_samples_by_source(
 
 def _write_json(output_path: Path, payload: dict[str, Any]) -> None:
     """Write one JSON file with stable formatting."""
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=True, indent=2, sort_keys=True)
-        handle.write("\n")
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )

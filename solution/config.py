@@ -16,6 +16,7 @@ METADATA_DIR_NAMES: Final[tuple[str, ...]] = ("__MACOSX",)
 
 SPLIT_FILENAME: Final[str] = "split.json"
 DEFAULT_DATA_ROOT: Final[Path] = Path("coord_data")
+DEFAULT_ARTIFACTS_DIR: Final[Path] = Path("artifacts")
 DEFAULT_ARCHIVE_NAME: Final[str] = "test-task.zip"
 DEFAULT_DATASET_URL: Final[str] = (
     "https://drive.google.com/file/d/1VVxx4I6T8xdtJnUnzsO-PnSnniGUnOwp/view?usp=drive_link"

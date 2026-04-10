@@ -9,11 +9,16 @@ from dataclasses import dataclass
 from functools import lru_cache
 from numbers import Real
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from solution.config import IMAGE_HEIGHT, IMAGE_WIDTH, VALID_SOURCES, SourceName
+from solution.config import (
+    DEFAULT_ARTIFACTS_DIR,
+    IMAGE_HEIGHT,
+    IMAGE_WIDTH,
+    VALID_SOURCES,
+    SourceName,
+)
 
-DEFAULT_ARTIFACTS_DIR = Path("artifacts")
 ARTIFACT_SCHEMA_VERSION = "1"
 
 
@@ -248,7 +253,7 @@ def _validate_source(source: str) -> SourceName:
     if source not in VALID_SOURCES:
         allowed_sources = ", ".join(VALID_SOURCES)
         raise ValueError(f"Unsupported source {source!r}. Expected one of: {allowed_sources}.")
-    return source
+    return cast(SourceName, source)
 
 
 def _validate_coordinate(name: str, value: float, upper_bound: int) -> float:

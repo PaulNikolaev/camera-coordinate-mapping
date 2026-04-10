@@ -9,9 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from solution.config import DEFAULT_DATA_ROOT, VALID_SOURCES, SourceName
+from solution.cli import (
+    add_artifacts_dir_argument,
+    add_data_root_argument,
+    add_output_metrics_argument,
+    add_strict_argument,
+)
+from solution.config import (
+    DEFAULT_ARTIFACTS_DIR,
+    DEFAULT_DATA_ROOT,
+    VALID_SOURCES,
+    SourceName,
+)
 from solution.data import TrainingDataReport, build_training_samples
-from solution.inference import DEFAULT_ARTIFACTS_DIR, load_artifacts
+from solution.inference import load_artifacts
+from solution.validation import ensure_dataset_present
 
 DEFAULT_METRICS_FILENAME = "metrics.json"
 METRICS_SCHEMA_VERSION = "1"
@@ -67,29 +79,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate MED on the validation split for top->door2 and bottom->door2."
     )
-    parser.add_argument(
-        "--data-root",
-        type=Path,
-        default=DEFAULT_DATA_ROOT,
-        help="Path to the unpacked coord_data directory (default: %(default)s).",
+    add_data_root_argument(parser)
+    add_artifacts_dir_argument(
+        parser,
+        help_text="Directory containing trained artifacts and the default metrics output.",
     )
-    parser.add_argument(
-        "--artifacts-dir",
-        type=Path,
-        default=DEFAULT_ARTIFACTS_DIR,
-        help="Directory containing trained artifacts and the default metrics output.",
-    )
-    parser.add_argument(
-        "--output-metrics",
-        type=Path,
-        default=None,
-        help="Where to save metrics.json (default: <artifacts-dir>/metrics.json).",
-    )
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="Use strict point-count filtering instead of allow_partial preparation.",
-    )
+    add_output_metrics_argument(parser)
+    add_strict_argument(parser)
     return parser
 
 
@@ -115,6 +111,7 @@ def evaluate_and_save_metrics(
         ArtifactLoadError: If inference artifacts cannot be loaded.
     """
 
+    ensure_dataset_present(Path(data_root))
     samples, report = build_training_samples(
         data_root=Path(data_root),
         split_name="val",
