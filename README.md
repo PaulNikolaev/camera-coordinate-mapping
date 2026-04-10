@@ -1,42 +1,50 @@
-## Подготовка датасета
+## Быстрый запуск с нуля
 
-Архив датасета:
-[Google Drive](https://drive.google.com/file/d/1VVxx4I6T8xdtJnUnzsO-PnSnniGUnOwp/view?usp=drive_link)
+Клонирование проекта:
 
-Автоматический сценарий скачивает архив, распаковывает его в `coord_data/` и запускает полную валидацию:
+```powershell
+git clone https://github.com/PaulNikolaev/camera-coordinate-mapping.git
+cd camera-coordinate-mapping
+```
+
+Создание и активация виртуального окружения:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Подготовка датасета:
 
 ```powershell
 python validate_data.py
 ```
 
-Зачем нужен `validate_data.py`:
+Обучение baseline-модели:
 
-- это отдельная strict-проверка архива;
-- она нужна, чтобы быстро увидеть реальные дефекты датасета:
-  отсутствующие JSON-файлы, битые записи, несовпадающие `number`,
-  отсутствующие изображения и другие нарушения структуры;
-- скрипт помогает диагностировать качество исходных данных до обучения;
-- эта команда не заменяет обучение и не является обязательным шагом перед будущим `train.py`:
-  для обучения будет использоваться отдельная подготовка данных в режиме `allow_partial`,
-  которая пропускает битые записи, но не останавливает весь пайплайн.
+```powershell
+python train.py --data-root coord_data --artifacts-dir artifacts
+```
 
-Что делает скрипт:
+Проверка инференса:
 
-- проверяет наличие `coord_data/`, `split.json`, `train/` и `val/`;
-- если архив распакован не в `coord_data/`, а, например, в `test-task/`, переносит его в канонический корень;
-- читает `split.json`, обходит все сессии и парсит `coords_top.json` / `coords_bottom.json`;
-- собирает пути к JPG относительно корня данных и проверяет структуру и содержимое аннотаций.
+```powershell
+python predict.py 1600 900 top --artifacts-dir artifacts
+python predict.py 1600 900 bottom --artifacts-dir artifacts
+```
 
-Ручная распаковка тоже допустима:
+Оценка качества на `val`:
 
-1. Скачай архив по ссылке выше.
-2. Распакуй его рядом с репозиторием.
-3. Если после распаковки получилась папка `test-task/`, переименуй её в `coord_data/`.
-4. Запусти `python validate_data.py --data-root coord_data`.
+```powershell
+python evaluate.py --data-root coord_data --artifacts-dir artifacts
+```
 
-Полезные флаги:
+После оценки метрики будут сохранены в `artifacts/metrics.json`.
 
-- `python validate_data.py --keep-archive` — оставить `test-task.zip` после скачивания.
-- `python validate_data.py --force-download` — скачать архив заново и заменить существующий `coord_data/`.
-- `python validate_data.py --archive-path downloads\test-task.zip` — сохранить архив в другой путь.
+Запуск тестов:
 
+```powershell
+python -m unittest discover -s tests -p "test_*.py"
+```
