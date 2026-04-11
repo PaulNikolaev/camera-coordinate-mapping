@@ -19,8 +19,10 @@ class DummyModel:
         self.y_multiplier = y_multiplier
 
     def predict(self, features: list[list[float]]) -> list[list[float]]:
-        x_value, y_value = features[0]
-        return [[x_value * self.x_multiplier, y_value * self.y_multiplier]]
+        return [
+            [x_value * self.x_multiplier, y_value * self.y_multiplier]
+            for x_value, y_value in features
+        ]
 
 
 class FixedOutputModel:
@@ -65,6 +67,25 @@ class LoadArtifactsTests(unittest.TestCase):
 
             self.assertEqual(predictor.predict(10.0, 10.0, "top"), (0.0, 1800.0))
 
+    def test_predict_batch_returns_all_predictions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifacts_dir = Path(temp_dir)
+            self._write_artifact_bundle(
+                artifacts_dir=artifacts_dir,
+                top_model=DummyModel(x_multiplier=3200.0, y_multiplier=1800.0),
+                bottom_model=DummyModel(x_multiplier=3200.0, y_multiplier=1800.0),
+            )
+
+            predictor = load_artifacts(artifacts_dir)
+
+            self.assertEqual(
+                predictor.predict_batch(
+                    points=((100.0, 200.0), (1600.0, 900.0)),
+                    source="top",
+                ),
+                ((100.0, 200.0), (1600.0, 900.0)),
+            )
+
     def test_invalid_source_raises_value_error(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             artifacts_dir = Path(temp_dir)
@@ -101,7 +122,7 @@ class LoadArtifactsTests(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "1",
-                        "model_family": "polynomial_ridge",
+                        "model_family": "extra_trees",
                         "sources": {
                             "top": {
                                 "model_path": "top_model.pkl",
@@ -130,7 +151,7 @@ class LoadArtifactsTests(unittest.TestCase):
     ) -> None:
         manifest = {
             "schema_version": "1",
-            "model_family": "polynomial_ridge",
+            "model_family": "extra_trees",
             "sources": {
                 "top": {
                     "model_path": "top_model.pkl",

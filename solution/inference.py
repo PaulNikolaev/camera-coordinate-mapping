@@ -15,6 +15,7 @@ from solution.config import (
     DEFAULT_ARTIFACTS_DIR,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
+    MODEL_FAMILY,
     VALID_SOURCES,
     SourceName,
 )
@@ -65,13 +66,53 @@ class LoadedArtifacts:
             ArtifactLoadError: If the loaded model returns malformed output.
         """
 
-        validated_source = _validate_source(source)
-        x_value = _validate_coordinate(name="x", value=x, upper_bound=IMAGE_WIDTH)
-        y_value = _validate_coordinate(name="y", value=y, upper_bound=IMAGE_HEIGHT)
+        predictions = self.predict_batch(points=((x, y),), source=source)
+        return predictions[0]
 
-        features = [[x_value / IMAGE_WIDTH, y_value / IMAGE_HEIGHT]]
-        raw_prediction = self.models[validated_source].predict(features)
-        return _normalize_prediction_output(raw_prediction)
+    def predict_batch(
+        self,
+        points: tuple[tuple[float, float], ...],
+        source: str,
+    ) -> tuple[tuple[float, float], ...]:
+        """Map many source-camera coordinates into the door2 frame at once.
+
+        Args:
+            points: Source-image `(x, y)` coordinates in pixels.
+            source: Source camera name, `top` or `bottom`.
+
+        Returns:
+            A tuple of `(x_door2, y_door2)` predictions in door2 pixel coordinates.
+
+        Raises:
+            TypeError: If any coordinate pair is malformed or non-numeric.
+            ValueError: If coordinates are outside the source frame or `source`
+                is invalid.
+            ArtifactLoadError: If the loaded model returns malformed output.
+        """
+
+        validated_source = _validate_source(source)
+        if not points:
+            return ()
+
+        features: list[list[float]] = []
+        for point in points:
+            if not isinstance(point, tuple) or len(point) != 2:
+                raise TypeError("Each item in 'points' must be a two-item (x, y) tuple.")
+
+            x_value = _validate_coordinate(
+                name="x",
+                value=point[0],
+                upper_bound=IMAGE_WIDTH,
+            )
+            y_value = _validate_coordinate(
+                name="y",
+                value=point[1],
+                upper_bound=IMAGE_HEIGHT,
+            )
+            features.append([x_value / IMAGE_WIDTH, y_value / IMAGE_HEIGHT])
+
+        raw_predictions = self.models[validated_source].predict(features)
+        return _normalize_batch_prediction_output(raw_predictions)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,36 +155,11 @@ def load_artifacts(artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR) -> LoadedArtifac
 
     models: dict[SourceName, Any] = {}
     for source in VALID_SOURCES:
-        model_path_value = source_entries[source].get("model_path")
-        if not isinstance(model_path_value, str) or not model_path_value.strip():
-            raise ArtifactLoadError(
-                f"Manifest entry for source '{source}' must define a non-empty 'model_path'."
-            )
-
-        model_path = artifacts_root / model_path_value
-        if not model_path.is_file():
-            raise ArtifactLoadError(
-                f"Model file for source '{source}' was not found: '{model_path}'."
-            )
-
-        try:
-            with model_path.open("rb") as handle:
-                model = pickle.load(handle)
-        except OSError as error:
-            raise ArtifactLoadError(
-                f"Failed to read model file for source '{source}': {error}."
-            ) from error
-        except (pickle.PickleError, AttributeError, EOFError, ImportError, ModuleNotFoundError) as error:
-            raise ArtifactLoadError(
-                f"Failed to deserialize model file for source '{source}': {error}."
-            ) from error
-
-        if not hasattr(model, "predict"):
-            raise ArtifactLoadError(
-                f"Model loaded for source '{source}' does not provide a 'predict' method."
-            )
-
-        models[source] = model
+        models[source] = _load_source_model(
+            artifacts_root=artifacts_root,
+            source=source,
+            source_entry=source_entries[source],
+        )
 
     return LoadedArtifacts(
         artifacts_dir=artifacts_root,
@@ -224,9 +240,9 @@ def _validate_manifest(manifest: dict[str, Any]) -> dict[SourceName, dict[str, A
         )
 
     model_family = manifest.get("model_family")
-    if model_family != "polynomial_ridge":
+    if model_family != MODEL_FAMILY:
         raise ArtifactLoadError(
-            f"Unsupported model family {model_family!r}. Expected 'polynomial_ridge'."
+            f"Unsupported model family {model_family!r}. Expected '{MODEL_FAMILY}'."
         )
 
     sources = manifest.get("sources")
@@ -271,6 +287,58 @@ def _validate_coordinate(name: str, value: float, upper_bound: int) -> float:
     return numeric_value
 
 
+def _load_source_model(
+        artifacts_root: Path,
+        source: SourceName,
+        source_entry: dict[str, Any],
+) -> Any:
+    """Load one validated source model from the artifact directory."""
+    model_path_value = source_entry.get("model_path")
+    if not isinstance(model_path_value, str) or not model_path_value.strip():
+        raise ArtifactLoadError(
+            f"Manifest entry for source '{source}' must define a non-empty 'model_path'."
+        )
+
+    model_path = artifacts_root / model_path_value
+    if not model_path.is_file():
+        raise ArtifactLoadError(
+            f"Model file for source '{source}' was not found: '{model_path}'."
+        )
+
+    try:
+        with model_path.open("rb") as handle:
+            model = pickle.load(handle)
+    except OSError as error:
+        raise ArtifactLoadError(
+            f"Failed to read model file for source '{source}': {error}."
+        ) from error
+    except (
+            pickle.PickleError,
+            AttributeError,
+            EOFError,
+            ImportError,
+            ModuleNotFoundError,
+    ) as error:
+        raise ArtifactLoadError(
+            f"Failed to deserialize model file for source '{source}': {error}."
+        ) from error
+
+    if not hasattr(model, "predict"):
+        raise ArtifactLoadError(
+            f"Model loaded for source '{source}' does not provide a 'predict' method."
+        )
+
+    # Single-threaded inference avoids heavy joblib overhead for many tiny
+    # prediction calls during evaluation, especially on Windows.
+    if hasattr(model, "n_jobs"):
+        try:
+            model.n_jobs = 1
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    return model
+
+
 def _normalize_prediction_output(raw_prediction: Any) -> tuple[float, float]:
     """Validate the model output shape and clip it into the door2 frame."""
 
@@ -283,6 +351,35 @@ def _normalize_prediction_output(raw_prediction: Any) -> tuple[float, float]:
             "Loaded model returned an invalid prediction format; expected [[x, y]]."
         ) from error
 
-    clipped_x = min(max(raw_x, 0.0), float(IMAGE_WIDTH))
-    clipped_y = min(max(raw_y, 0.0), float(IMAGE_HEIGHT))
-    return clipped_x, clipped_y
+    return _clip_coordinate(raw_x, IMAGE_WIDTH), _clip_coordinate(raw_y, IMAGE_HEIGHT)
+
+
+def _normalize_batch_prediction_output(
+    raw_predictions: Any,
+) -> tuple[tuple[float, float], ...]:
+    """Validate batched model output shape and clip it into the door2 frame."""
+
+    try:
+        predictions = tuple(
+            (
+                _clip_coordinate(float(raw_prediction[0]), IMAGE_WIDTH),
+                _clip_coordinate(float(raw_prediction[1]), IMAGE_HEIGHT),
+            )
+            for raw_prediction in raw_predictions
+        )
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        raise ArtifactLoadError(
+            "Loaded model returned an invalid prediction format; expected [[x, y], ...]."
+        ) from error
+
+    if not predictions:
+        raise ArtifactLoadError(
+            "Loaded model returned an empty prediction batch for non-empty input."
+        )
+
+    return predictions
+
+
+def _clip_coordinate(value: float, upper_bound: int) -> float:
+    """Clip one numeric coordinate into the inclusive image range."""
+    return min(max(value, 0.0), float(upper_bound))

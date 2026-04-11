@@ -16,8 +16,10 @@ class IdentityPixelModel:
 
     @staticmethod
     def predict(features: list[list[float]]) -> list[list[float]]:
-        x_value, y_value = features[0]
-        return [[x_value * 3200.0, y_value * 1800.0]]
+        return [
+            [x_value * 3200.0, y_value * 1800.0]
+            for x_value, y_value in features
+        ]
 
 
 class EvaluateModelsTests(unittest.TestCase):
@@ -124,7 +126,7 @@ class EvaluateModelsTests(unittest.TestCase):
     def _write_artifacts(artifacts_dir: Path) -> None:
         manifest = {
             "schema_version": "1",
-            "model_family": "polynomial_ridge",
+            "model_family": "extra_trees",
             "sources": {
                 "top": {
                     "model_path": "top_model.pkl",

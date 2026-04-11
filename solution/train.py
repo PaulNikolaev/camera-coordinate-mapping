@@ -5,14 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import pickle
-import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.ensemble import ExtraTreesRegressor
 
 from solution.cli import add_artifacts_dir_argument, add_data_root_argument, add_strict_argument
 from solution.config import (
@@ -20,15 +17,17 @@ from solution.config import (
     DEFAULT_DATA_ROOT,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
+    MODEL_FAMILY,
     VALID_SOURCES,
     SourceName,
 )
 from solution.data import TrainingDataReport, TrainingSample, build_training_samples
 from solution.validation import ensure_dataset_present
 
-DEFAULT_POLYNOMIAL_DEGREE = 2
-DEFAULT_RIDGE_ALPHA = 1.0
 DEFAULT_RANDOM_SEED = 42
+DEFAULT_EXTRA_TREES_ESTIMATORS = 600
+DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF = 2
+DEFAULT_EXTRA_TREES_N_JOBS = 1
 ARTIFACT_SCHEMA_VERSION = "1"
 
 
@@ -56,7 +55,7 @@ class TrainingRunResult:
 def build_parser() -> argparse.ArgumentParser:
     """Build the CLI parser for baseline model training."""
     parser = argparse.ArgumentParser(
-        description="Train polynomial Ridge baselines for top->door2 and bottom->door2."
+        description="Train ExtraTrees baselines for top->door2 and bottom->door2."
     )
     add_data_root_argument(parser)
     add_artifacts_dir_argument(
@@ -64,16 +63,16 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Directory where trained artifacts and reports will be saved.",
     )
     parser.add_argument(
-        "--degree",
+        "--n-estimators",
         type=int,
-        default=DEFAULT_POLYNOMIAL_DEGREE,
-        help="PolynomialFeatures degree for both source models.",
+        default=DEFAULT_EXTRA_TREES_ESTIMATORS,
+        help="Number of trees for both source models.",
     )
     parser.add_argument(
-        "--alpha",
-        type=float,
-        default=DEFAULT_RIDGE_ALPHA,
-        help="Ridge regularization strength for both source models.",
+        "--min-samples-leaf",
+        type=int,
+        default=DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF,
+        help="Minimum number of samples required in each leaf for both source models.",
     )
     parser.add_argument(
         "--seed",
@@ -88,8 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
 def train_and_save_models(
         data_root: Path = DEFAULT_DATA_ROOT,
         artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR,
-        degree: int = DEFAULT_POLYNOMIAL_DEGREE,
-        alpha: float = DEFAULT_RIDGE_ALPHA,
+        n_estimators: int = DEFAULT_EXTRA_TREES_ESTIMATORS,
+        min_samples_leaf: int = DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF,
         seed: int = DEFAULT_RANDOM_SEED,
         strict: bool = False,
 ) -> TrainingRunResult:
@@ -98,8 +97,8 @@ def train_and_save_models(
     Args:
         data_root: Dataset root with `split.json`, `train/`, and `val/`.
         artifacts_dir: Output directory for serialized models and JSON reports.
-        degree: Polynomial feature degree used by both models.
-        alpha: Ridge regularization strength.
+        n_estimators: Number of trees used by both ExtraTrees regressors.
+        min_samples_leaf: Minimum number of samples per leaf node.
         seed: Random seed recorded in the artifact manifest.
         strict: Whether to use strict or allow_partial sample preparation.
 
@@ -109,16 +108,17 @@ def train_and_save_models(
     Raises:
         ValueError: If there are no usable samples or invalid training params.
     """
-    if degree < 1:
-        raise ValueError(f"'degree' must be >= 1, got {degree}.")
-    if alpha < 0.0:
-        raise ValueError(f"'alpha' must be >= 0, got {alpha}.")
+    _validate_training_params(
+        n_estimators=n_estimators,
+        min_samples_leaf=min_samples_leaf,
+    )
 
-    ensure_dataset_present(Path(data_root))
-    random.seed(seed)
+    data_root = Path(data_root)
+    artifacts_root = Path(artifacts_dir)
+    ensure_dataset_present(data_root)
 
     samples, report = build_training_samples(
-        data_root=Path(data_root),
+        data_root=data_root,
         split_name="train",
         strict=strict,
     )
@@ -126,7 +126,6 @@ def train_and_save_models(
         raise ValueError("No usable training samples were produced from the train split.")
 
     grouped_samples = _group_samples_by_source(samples)
-    artifacts_root = Path(artifacts_dir)
     artifacts_root.mkdir(parents=True, exist_ok=True)
 
     source_artifacts: dict[SourceName, TrainedSourceArtifact] = {}
@@ -135,7 +134,12 @@ def train_and_save_models(
         if not source_samples:
             raise ValueError(f"No usable training samples were produced for source '{source}'.")
 
-        model = train_source_model(source_samples=source_samples, degree=degree, alpha=alpha)
+        model = train_source_model(
+            source_samples=source_samples,
+            n_estimators=n_estimators,
+            min_samples_leaf=min_samples_leaf,
+            seed=seed,
+        )
         model_path = artifacts_root / f"{source}_model.pkl"
         model_path.write_bytes(pickle.dumps(model))
 
@@ -155,8 +159,8 @@ def train_and_save_models(
         build_artifact_manifest(
             report=report,
             source_artifacts=source_artifacts,
-            degree=degree,
-            alpha=alpha,
+            n_estimators=n_estimators,
+            min_samples_leaf=min_samples_leaf,
             seed=seed,
             strict=strict,
         ),
@@ -173,24 +177,19 @@ def train_and_save_models(
 
 def train_source_model(
         source_samples: tuple[TrainingSample, ...],
-        degree: int,
-        alpha: float,
-) -> Pipeline:
-    """Train one source-specific polynomial Ridge model."""
-    features = [
-        [sample.x_src / IMAGE_WIDTH, sample.y_src / IMAGE_HEIGHT]
-        for sample in source_samples
-    ]
+        n_estimators: int,
+        min_samples_leaf: int,
+        seed: int,
+) -> ExtraTreesRegressor:
+    """Train one source-specific ExtraTrees regressor."""
+    features = [_build_feature_row(sample.x_src, sample.y_src) for sample in source_samples]
     targets = [[sample.x_door2, sample.y_door2] for sample in source_samples]
 
-    model = Pipeline(
-        steps=[
-            (
-                "polynomial_features",
-                PolynomialFeatures(degree=degree, include_bias=False),
-            ),
-            ("ridge", Ridge(alpha=alpha)),
-        ]
+    model = ExtraTreesRegressor(
+        n_estimators=n_estimators,
+        min_samples_leaf=min_samples_leaf,
+        random_state=seed,
+        n_jobs=DEFAULT_EXTRA_TREES_N_JOBS,
     )
     model.fit(features, targets)
     return model
@@ -199,21 +198,21 @@ def train_source_model(
 def build_artifact_manifest(
         report: TrainingDataReport,
         source_artifacts: dict[SourceName, TrainedSourceArtifact],
-        degree: int,
-        alpha: float,
+        n_estimators: int,
+        min_samples_leaf: int,
         seed: int,
         strict: bool,
 ) -> dict[str, Any]:
     """Build a stable JSON manifest for downstream loading."""
     return {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
-        "model_family": "polynomial_ridge",
+        "model_family": MODEL_FAMILY,
         "train_split": report.split_name,
         "strict": strict,
         "seed": seed,
         "model_params": {
-            "degree": degree,
-            "alpha": alpha,
+            "n_estimators": n_estimators,
+            "min_samples_leaf": min_samples_leaf,
         },
         "input_normalization": {
             "x_scale": IMAGE_WIDTH,
@@ -243,8 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     result = train_and_save_models(
         data_root=args.data_root,
         artifacts_dir=args.artifacts_dir,
-        degree=args.degree,
-        alpha=args.alpha,
+        n_estimators=args.n_estimators,
+        min_samples_leaf=args.min_samples_leaf,
         seed=args.seed,
         strict=args.strict,
     )
@@ -268,6 +267,22 @@ def _group_samples_by_source(
         grouped[sample.source].append(sample)
 
     return {source: tuple(grouped[source]) for source in VALID_SOURCES}
+
+
+def _build_feature_row(x_src: float, y_src: float) -> list[float]:
+    """Build one normalized feature row from source-image coordinates."""
+    return [x_src / IMAGE_WIDTH, y_src / IMAGE_HEIGHT]
+
+
+def _validate_training_params(
+        n_estimators: int,
+        min_samples_leaf: int,
+) -> None:
+    """Validate baseline training hyperparameters."""
+    if n_estimators < 1:
+        raise ValueError(f"'n_estimators' must be >= 1, got {n_estimators}.")
+    if min_samples_leaf < 1:
+        raise ValueError(f"'min_samples_leaf' must be >= 1, got {min_samples_leaf}.")
 
 
 def _write_json(output_path: Path, payload: dict[str, Any]) -> None:

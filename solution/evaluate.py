@@ -111,31 +111,48 @@ def evaluate_and_save_metrics(
         ArtifactLoadError: If inference artifacts cannot be loaded.
     """
 
-    ensure_dataset_present(Path(data_root))
+    data_root = Path(data_root)
+    artifacts_dir = Path(artifacts_dir)
+
+    ensure_dataset_present(data_root)
     samples, report = build_training_samples(
-        data_root=Path(data_root),
+        data_root=data_root,
         split_name="val",
         strict=strict,
     )
     if not samples:
         raise ValueError("No usable evaluation samples were produced from the val split.")
 
-    predictor = load_artifacts(Path(artifacts_dir))
+    predictor = load_artifacts(artifacts_dir)
 
     per_source_accumulators = {
         source: _DistanceAccumulator() for source in VALID_SOURCES
     }
     overall_accumulator = _DistanceAccumulator()
 
-    for sample in samples:
-        predicted_x, predicted_y = predictor.predict(
-            x=sample.x_src,
-            y=sample.y_src,
-            source=sample.source,
+    for source in VALID_SOURCES:
+        source_samples = tuple(sample for sample in samples if sample.source == source)
+        if not source_samples:
+            continue
+
+        predictions = predictor.predict_batch(
+            points=tuple((sample.x_src, sample.y_src) for sample in source_samples),
+            source=source,
         )
-        distance = math.hypot(predicted_x - sample.x_door2, predicted_y - sample.y_door2)
-        per_source_accumulators[sample.source].add(distance)
-        overall_accumulator.add(distance)
+        if len(predictions) != len(source_samples):
+            raise ValueError(
+                "Model returned a different number of predictions than evaluation samples."
+            )
+
+        accumulator = per_source_accumulators[source]
+        for sample, prediction in zip(source_samples, predictions):
+            predicted_x, predicted_y = prediction
+            distance = math.hypot(
+                predicted_x - sample.x_door2,
+                predicted_y - sample.y_door2,
+            )
+            accumulator.add(distance)
+            overall_accumulator.add(distance)
 
     source_metrics: dict[SourceName, SourceEvaluationMetrics] = {}
     for source in VALID_SOURCES:
@@ -150,10 +167,9 @@ def evaluate_and_save_metrics(
             record_count=report.sources[source].records_used,
         )
 
-    metrics_path = (
-        Path(output_metrics)
-        if output_metrics is not None
-        else Path(artifacts_dir) / DEFAULT_METRICS_FILENAME
+    metrics_path = _resolve_metrics_path(
+        artifacts_dir=artifacts_dir,
+        output_metrics=output_metrics,
     )
     metrics_payload = build_metrics_payload(
         report=report,
@@ -164,7 +180,7 @@ def evaluate_and_save_metrics(
     _write_json(metrics_path, metrics_payload)
 
     return EvaluationRunResult(
-        artifacts_dir=Path(artifacts_dir),
+        artifacts_dir=artifacts_dir,
         metrics_path=metrics_path,
         source_metrics=source_metrics,
         overall_med=metrics_payload["overall"]["med"],
@@ -234,3 +250,13 @@ def _write_json(output_path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def _resolve_metrics_path(
+        artifacts_dir: Path,
+        output_metrics: Path | None,
+) -> Path:
+    """Resolve where evaluation metrics should be saved."""
+    if output_metrics is not None:
+        return Path(output_metrics)
+    return artifacts_dir / DEFAULT_METRICS_FILENAME

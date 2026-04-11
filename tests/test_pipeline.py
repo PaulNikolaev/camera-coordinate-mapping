@@ -25,8 +25,8 @@ class RunPipelineTests(unittest.TestCase):
             result = run_pipeline(
                 data_root=data_root,
                 artifacts_dir=artifacts_dir,
-                degree=1,
-                alpha=0.0,
+                n_estimators=50,
+                min_samples_leaf=1,
                 seed=7,
                 output_metrics=output_metrics,
             )

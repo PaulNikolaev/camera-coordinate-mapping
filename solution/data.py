@@ -505,16 +505,14 @@ def _build_record_training_samples(
         _increment_reason(report, source, "point_out_of_range")
         return None
 
-    if strict and (
-            not _has_valid_point_count(door2_points) or not _has_valid_point_count(source_points)
-    ):
+    has_invalid_point_count = (
+        not _has_valid_point_count(door2_points)
+        or not _has_valid_point_count(source_points)
+    )
+    if has_invalid_point_count:
         _increment_reason(report, source, "invalid_point_count")
-        return None
-
-    if not strict and (
-            not _has_valid_point_count(door2_points) or not _has_valid_point_count(source_points)
-    ):
-        _increment_reason(report, source, "invalid_point_count")
+        if strict:
+            return None
 
     door2_points_by_number = _map_points_by_number(door2_points)
     source_points_by_number = _map_points_by_number(source_points)

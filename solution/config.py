@@ -13,6 +13,7 @@ IMAGE_HEIGHT: Final[int] = 1800
 EXPECTED_SPLITS: Final[tuple[str, str]] = ("train", "val")
 VALID_SOURCES: Final[tuple[SourceName, SourceName]] = ("top", "bottom")
 METADATA_DIR_NAMES: Final[tuple[str, ...]] = ("__MACOSX",)
+MODEL_FAMILY: Final[str] = "extra_trees"
 
 SPLIT_FILENAME: Final[str] = "split.json"
 DEFAULT_DATA_ROOT: Final[Path] = Path("coord_data")

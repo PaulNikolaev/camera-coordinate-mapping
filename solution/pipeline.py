@@ -15,9 +15,9 @@ from solution.cli import (
 from solution.config import DEFAULT_ARTIFACTS_DIR, DEFAULT_DATA_ROOT
 from solution.evaluate import EvaluationRunResult, evaluate_and_save_metrics
 from solution.train import (
-    DEFAULT_POLYNOMIAL_DEGREE,
     DEFAULT_RANDOM_SEED,
-    DEFAULT_RIDGE_ALPHA,
+    DEFAULT_EXTRA_TREES_ESTIMATORS,
+    DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF,
     TrainingRunResult,
     train_and_save_models,
 )
@@ -42,16 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
         help_text="Directory where artifacts, reports, and metrics will be saved.",
     )
     parser.add_argument(
-        "--degree",
+        "--n-estimators",
         type=int,
-        default=DEFAULT_POLYNOMIAL_DEGREE,
-        help="PolynomialFeatures degree for both source models.",
+        default=DEFAULT_EXTRA_TREES_ESTIMATORS,
+        help="Number of trees for both source models.",
     )
     parser.add_argument(
-        "--alpha",
-        type=float,
-        default=DEFAULT_RIDGE_ALPHA,
-        help="Ridge regularization strength for both source models.",
+        "--min-samples-leaf",
+        type=int,
+        default=DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF,
+        help="Minimum number of samples required in each leaf for both source models.",
     )
     parser.add_argument(
         "--seed",
@@ -67,23 +67,26 @@ def build_parser() -> argparse.ArgumentParser:
 def run_pipeline(
         data_root: Path = DEFAULT_DATA_ROOT,
         artifacts_dir: Path = DEFAULT_ARTIFACTS_DIR,
-        degree: int = DEFAULT_POLYNOMIAL_DEGREE,
-        alpha: float = DEFAULT_RIDGE_ALPHA,
+        n_estimators: int = DEFAULT_EXTRA_TREES_ESTIMATORS,
+        min_samples_leaf: int = DEFAULT_EXTRA_TREES_MIN_SAMPLES_LEAF,
         seed: int = DEFAULT_RANDOM_SEED,
         output_metrics: Path | None = None,
         strict: bool = False,
 ) -> PipelineRunResult:
     """Train artifacts and immediately evaluate them on the validation split."""
+    data_root = Path(data_root)
+    artifacts_dir = Path(artifacts_dir)
+
     training_result = train_and_save_models(
-        data_root=Path(data_root),
-        artifacts_dir=Path(artifacts_dir),
-        degree=degree,
-        alpha=alpha,
+        data_root=data_root,
+        artifacts_dir=artifacts_dir,
+        n_estimators=n_estimators,
+        min_samples_leaf=min_samples_leaf,
         seed=seed,
         strict=strict,
     )
     evaluation_result = evaluate_and_save_metrics(
-        data_root=Path(data_root),
+        data_root=data_root,
         artifacts_dir=training_result.artifacts_dir,
         output_metrics=output_metrics,
         strict=strict,
@@ -97,8 +100,8 @@ def main(argv: list[str] | None = None) -> int:
     result = run_pipeline(
         data_root=args.data_root,
         artifacts_dir=args.artifacts_dir,
-        degree=args.degree,
-        alpha=args.alpha,
+        n_estimators=args.n_estimators,
+        min_samples_leaf=args.min_samples_leaf,
         seed=args.seed,
         output_metrics=args.output_metrics,
         strict=args.strict,
